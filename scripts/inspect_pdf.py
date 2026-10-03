@@ -16,7 +16,13 @@ from pathlib import Path
 
 import pymupdf
 
-from datasheet_rag.ingestion.pdf_parser import TABLE_EXTRACTORS, ExtractedTable, PageContent, parse_pdf
+from datasheet_rag.ingestion.pdf_parser import (
+    PDFPLUMBER_TEXT_SETTINGS,
+    TABLE_EXTRACTORS,
+    ExtractedTable,
+    PageContent,
+    parse_pdf,
+)
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "data" / "reports"
 # High enough to read the small fonts used in datasheet tables, low enough to
@@ -120,7 +126,8 @@ def build_report(
         "",
         f"- Source: `{pdf_path.name}` ({page_count} pages)",
         f"- Pages in this report: {pages_spec or 'all'} ({len(mupdf_pages)} pages)",
-        "- Text: PyMuPDF `get_text(sort=True)`",
+        "- Text: PyMuPDF `get_text()`, in the order stored in the file",
+        f"- pdfplumber cell text settings: `{dict(PDFPLUMBER_TEXT_SETTINGS)}`",
         f"- Extraction time (text + tables): {times}",
         f"- Tables found: {totals}",
         "",

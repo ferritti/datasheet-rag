@@ -1,8 +1,8 @@
 """Extract page text and tables from a datasheet PDF.
 
-Text always comes from PyMuPDF. Tables can come from PyMuPDF or pdfplumber:
-both are kept for now so we can compare them on the real STM32 datasheets and
-keep the one that handles their tables better.
+Text always comes from PyMuPDF. Tables come from pdfplumber by default, which
+handled the STM32 datasheet tables better (see docs/pdf_extraction.md). PyMuPDF
+can still be used for tables, so the two extractors can be compared.
 
 Page numbers are 1-based, matching what a PDF viewer shows. Citations and the
 `page` field of the evaluation set use the same convention.
@@ -10,10 +10,10 @@ Page numbers are 1-based, matching what a PDF viewer shows. Citations and the
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import pdfplumber
 import pymupdf
@@ -21,6 +21,16 @@ from pdfplumber.page import Page as PlumberPage
 
 TableExtractor = Literal["pymupdf", "pdfplumber"]
 TABLE_EXTRACTORS: tuple[TableExtractor, ...] = ("pymupdf", "pdfplumber")
+
+# How pdfplumber turns the characters of a table cell into text, tuned on the
+# STM32 datasheets (docs/pdf_extraction.md):
+# - y_tolerance=4 (default 3): characters whose tops differ by less than this
+#   are on the same line. Subscripts sit about 3.7 pt lower than their symbol,
+#   so the default splits "VDD" into "V\nDD"; from 5 up, separate lines of
+#   small text start to get mixed together.
+# - char_dir_rotated="btt": rotated text (e.g. pin table headers) reads bottom
+#   to top; the default order spells it backwards ("niP" for "Pin").
+PDFPLUMBER_TEXT_SETTINGS: Mapping[str, Any] = {"y_tolerance": 4, "char_dir_rotated": "btt"}
 
 # (x0, top, x1, bottom) in PDF points, origin at the top-left corner of the page.
 # Both libraries use this convention, so boxes from the two extractors can be
@@ -46,10 +56,11 @@ class PageContent:
 
 
 def extract_text(page: pymupdf.Page) -> str:
-    # sort=True orders text blocks by position (top to bottom, then left to
-    # right) instead of the order they are stored in the file, which is not
-    # always the reading order.
-    return page.get_text("text", sort=True)
+    # Text in the order it is stored in the file, which in the ST datasheets is
+    # the reading order. sort=True (order by position) was tried and is worse:
+    # it interleaves the two columns of the cover page and, on landscape pages,
+    # mixes the table caption with the table body.
+    return page.get_text("text")
 
 
 def extract_tables_pymupdf(page: pymupdf.Page, page_number: int) -> list[ExtractedTable]:
@@ -59,11 +70,16 @@ def extract_tables_pymupdf(page: pymupdf.Page, page_number: int) -> list[Extract
     ]
 
 
-def extract_tables_pdfplumber(page: PlumberPage, page_number: int) -> list[ExtractedTable]:
+def extract_tables_pdfplumber(
+    page: PlumberPage,
+    page_number: int,
+    text_settings: Mapping[str, Any] = PDFPLUMBER_TEXT_SETTINGS,
+) -> list[ExtractedTable]:
+    """Find the tables on a page; text_settings={} gives pdfplumber's defaults."""
     # find_tables() rather than extract_tables(): only the former also returns
     # each table's bounding box.
     return [
-        ExtractedTable(page=page_number, bbox=tuple(table.bbox), rows=table.extract())
+        ExtractedTable(page=page_number, bbox=tuple(table.bbox), rows=table.extract(**text_settings))
         for table in page.find_tables()
     ]
 
@@ -71,7 +87,7 @@ def extract_tables_pdfplumber(page: PlumberPage, page_number: int) -> list[Extra
 def parse_pdf(
     pdf_path: str | Path,
     pages: Sequence[int] | None = None,
-    table_extractor: TableExtractor = "pymupdf",
+    table_extractor: TableExtractor = "pdfplumber",
 ) -> list[PageContent]:
     """Parse the text and tables of a PDF, one PageContent per page.
 
