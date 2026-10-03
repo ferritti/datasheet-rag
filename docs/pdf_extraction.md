@@ -111,6 +111,8 @@ reading order, and sorting makes things worse:
 
 ## Open issues for chunking
 
+These are handled by the chunking step, see [chunking.md](chunking.md).
+
 1. **Figure fragments detected as tables**: filter them (e.g. by size, shape or
    missing text); the criterion still has to be measured.
 2. **Tables split over pages** (256 "continued" captions): each part needs the

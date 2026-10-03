@@ -3,8 +3,9 @@
 data/raw/*
 !data/raw/.gitkeep
 
-# Extraction reports contain datasheet text, so they are not committed either.
+# Extraction reports and chunks contain datasheet text, so they are not committed either.
 data/reports/
+data/processed/
 
 # Secrets
 .env
