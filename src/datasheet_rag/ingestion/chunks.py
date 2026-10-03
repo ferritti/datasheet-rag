@@ -7,6 +7,7 @@ Two rules hold for every chunk, whatever strategy builds it:
   have near-identical tables and only the name tells them apart.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -26,6 +27,15 @@ class Chunk:
     section: str  # e.g. "6.3.1 General operating conditions"; "" if unknown
     title: str | None  # table caption, e.g. "Table 14. General operating conditions"
     text: str  # what gets embedded and searched
+
+
+def normalize_text(text: str) -> str:
+    """Join the lines of a cell or paragraph and normalise minus signs."""
+    # Names wrapped after an underscore or a slash in narrow cells:
+    # "USART2_\nCTS", "TIM2_CH1/\nTIM2_ETR".
+    text = text.replace("_\n", "_").replace("/\n", "/")
+    text = re.sub(r"[–−](?=\d)", "-", text)  # en dash or minus sign used as a minus: "–0.3"
+    return " ".join(text.split())  # other line breaks and repeated spaces
 
 
 def doc_id(pdf_path: str | Path) -> str:

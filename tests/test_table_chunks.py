@@ -71,7 +71,9 @@ def test_find_caption_takes_the_table_caption_just_above():
         block("Table 14. General operating conditions (continued)", 90, 101),
         block("STM32F401xD STM32F401xE", 59, 70, in_margin=True),
     ]
-    assert find_caption(t, blocks) == (14, "Table 14. General operating conditions")
+    number, caption, caption_block = find_caption(t, blocks)
+    assert (number, caption) == (14, "Table 14. General operating conditions")
+    assert caption_block is blocks[1]
 
 
 def test_find_caption_returns_none_for_tables_in_figures():
@@ -87,7 +89,9 @@ def test_find_notes_reads_consecutive_footnotes_and_their_continuations():
         block("to Table 66.", 251, 260),  # a footnote continued in the next block
         block("Note:\nThis paragraph is not a footnote.", 275, 290),  # 15 pt below
     ]
-    assert find_notes(t, blocks) == {1: "Guaranteed by design.", 2: "When the ADC is used, refer to Table 66."}
+    notes, note_blocks = find_notes(t, blocks)
+    assert notes == {1: "Guaranteed by design.", 2: "When the ADC is used, refer to Table 66."}
+    assert note_blocks == blocks[:3]
 
 
 def test_notes_at_page_top():
@@ -98,8 +102,10 @@ def test_notes_at_page_top():
         block("2.\nGuaranteed by design.", 125, 135),
         block("6.3.2 VCAP_1/VCAP_2 external capacitors", 180, 194),
     ]
-    assert notes_at_page_top(blocks) == {1: "Evaluated by characterization.", 2: "Guaranteed by design."}
-    assert notes_at_page_top([block("6.3.2 VCAP_1/VCAP_2 external capacitors", 96, 110)]) == {}
+    notes, note_blocks = notes_at_page_top(blocks)
+    assert notes == {1: "Evaluated by characterization.", 2: "Guaranteed by design."}
+    assert note_blocks == blocks[1:4]
+    assert notes_at_page_top([block("6.3.2 VCAP_1/VCAP_2 external capacitors", 96, 110)]) == ({}, [])
 
 
 def test_table_split_over_pages_gets_its_footnotes_in_every_part():
@@ -128,6 +134,19 @@ def test_table_split_over_pages_gets_its_footnotes_in_every_part():
         "Notes: 1. VDD minimum value with an external supervisor."
     )
     assert chunks[1].text.endswith("Notes: 2. See the thermal characteristics.")
+
+
+def test_section_of_the_caption_goes_into_the_prefix():
+    blocks = [block("6.3.1 General operating conditions", 120, 133), block("Table 14. General operating conditions", 146, 157)]
+    pages = [PageContent(page=60, text="", blocks=blocks, tables=[table(60, 159, 300, [
+        HEADER, ["VDD", "Standard operating voltage", "1.7", "3.6", "V"],
+    ])])]
+    sections = {60: ["6.3.1 General operating conditions", "6.3.1 General operating conditions"]}
+    [chunk] = table_chunks("stm32f401re", pages, sections)
+    assert chunk.section == "6.3.1 General operating conditions"
+    assert chunk.text.startswith(
+        "STM32F401RE datasheet | 6.3.1 General operating conditions | Table 14. General operating conditions\n"
+    )
 
 
 def test_long_tables_are_split_into_chunks_that_each_start_with_the_caption():

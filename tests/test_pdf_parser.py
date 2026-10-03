@@ -15,7 +15,13 @@ import pdfplumber
 import pymupdf
 import pytest
 
-from datasheet_rag.ingestion.pdf_parser import TABLE_EXTRACTORS, extract_tables_pdfplumber, parse_pdf
+from datasheet_rag.ingestion.pdf_parser import (
+    TABLE_EXTRACTORS,
+    OutlineEntry,
+    extract_tables_pdfplumber,
+    parse_pdf,
+    read_outline,
+)
 
 TABLE_ROWS = [
     ["Symbol", "Min", "Max"],
@@ -139,6 +145,16 @@ def test_pages_argument_selects_pages_by_one_based_number(sample_pdf, extractor)
     assert len(pages) == 1
     assert pages[0].page == 2
     assert "Page without tables" in pages[0].text
+
+
+def test_read_outline(tmp_path):
+    path = tmp_path / "outline.pdf"
+    with pymupdf.open() as doc:
+        doc.new_page()
+        doc.new_page()
+        doc.set_toc([[1, "1 Introduction", 1], [2, "Table 1. Device summary", 2]])
+        doc.save(path)
+    assert read_outline(path) == [OutlineEntry(1, "1 Introduction", 1), OutlineEntry(2, "Table 1. Device summary", 2)]
 
 
 def test_rejects_pages_out_of_range(sample_pdf):

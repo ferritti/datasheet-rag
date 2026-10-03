@@ -12,10 +12,10 @@ with long footnotes can exceed it, since cutting either would lose meaning.
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from datasheet_rag.ingestion.chunks import MAX_CHUNK_CHARS, Chunk, device_name
+from datasheet_rag.ingestion.chunks import MAX_CHUNK_CHARS, Chunk, device_name, normalize_text
 from datasheet_rag.ingestion.pdf_parser import ExtractedTable, PageContent, TextBlock
 
 CAPTION = re.compile(r"^Table (\d+)\.\s+(.+)$", re.DOTALL)
@@ -41,24 +41,22 @@ class CaptionedTable:
     number: int  # N in "Table N."
     caption: str  # cleaned caption without "(continued)", e.g. "Table 14. General operating conditions"
     table: ExtractedTable
+    section: str = ""  # section the caption is in, e.g. "6.3.1 General operating conditions"
     notes: dict[int, str] = field(default_factory=dict)  # footnotes printed below this part of the table
+    # The caption and footnote blocks, so the text chunks do not repeat them.
+    used_blocks: list[TextBlock] = field(default_factory=list)
 
 
 def clean_cell(text: str) -> str:
     """Normalise the text of a table cell or caption."""
     if "(cid:" in text:  # characters from a font without a Unicode mapping: unreadable
         return ""
-    # Names wrapped after an underscore or a slash in narrow cells:
-    # "USART2_\nCTS", "TIM2_CH1/\nTIM2_ETR".
-    text = text.replace("_\n", "_").replace("/\n", "/")
-    text = re.sub(r"[–−](?=\d)", "-", text)  # en dash or minus sign used as a minus: "–0.3"
     # Footnote references, so that "1.7(1)" is not read as 1.71.
-    text = NOTE_MARKER.sub(r" [note \1]", text)
-    return " ".join(text.split())  # other line breaks and repeated spaces
+    return normalize_text(NOTE_MARKER.sub(r" [note \1]", text))
 
 
-def find_caption(table: ExtractedTable, blocks: Sequence[TextBlock]) -> tuple[int, str] | None:
-    """The table number and caption of the "Table N." block just above the table, if any."""
+def find_caption(table: ExtractedTable, blocks: Sequence[TextBlock]) -> tuple[int, str, TextBlock] | None:
+    """Table number, cleaned caption and block of the "Table N." caption just above the table, if any."""
     x0, top, x1, _ = table.bbox
     candidates = []
     for block in blocks:
@@ -66,16 +64,20 @@ def find_caption(table: ExtractedTable, blocks: Sequence[TextBlock]) -> tuple[in
         gap = top - block.bbox[3]
         overlaps = block.bbox[0] < x1 and block.bbox[2] > x0
         if match and not block.in_margin and overlaps and -3 <= gap <= MAX_CAPTION_GAP:
-            candidates.append((gap, int(match[1]), clean_cell(block.text)))
+            candidates.append((gap, int(match[1]), block))
     if not candidates:
         return None
-    _, number, caption = min(candidates)
-    return number, caption.replace(" (continued)", "")
+    _, number, block = min(candidates, key=lambda candidate: candidate[0])
+    return number, clean_cell(block.text).replace(" (continued)", ""), block
 
 
-def read_notes(blocks: Sequence[TextBlock], start: float) -> dict[int, str]:
-    """Numbered footnotes in `blocks` (sorted top to bottom), the first one starting just below `start`."""
+def read_notes(blocks: Sequence[TextBlock], start: float) -> tuple[dict[int, str], list[TextBlock]]:
+    """Numbered footnotes in `blocks` (sorted top to bottom), the first one starting just below `start`.
+
+    Returns the footnotes by number and the blocks they were read from.
+    """
     notes: dict[int, str] = {}
+    used: list[TextBlock] = []
     previous_bottom = start
     for block in blocks:
         if block.bbox[1] - previous_bottom > MAX_NOTE_GAP:
@@ -88,12 +90,13 @@ def read_notes(blocks: Sequence[TextBlock], start: float) -> dict[int, str]:
             notes[last] += " " + " ".join(block.text.split())
         elif block.text != "Notes:":  # some footnote lists have a "Notes:" heading
             break
+        used.append(block)
         previous_bottom = block.bbox[3]
-    return notes
+    return notes, used
 
 
-def find_notes(table: ExtractedTable, blocks: Sequence[TextBlock]) -> dict[int, str]:
-    """The numbered footnotes printed right below the table."""
+def find_notes(table: ExtractedTable, blocks: Sequence[TextBlock]) -> tuple[dict[int, str], list[TextBlock]]:
+    """The numbered footnotes printed right below the table, and their blocks."""
     x0, _, x1, bottom = table.bbox
     below = sorted(
         (b for b in blocks if not b.in_margin and b.bbox[1] >= bottom - 2 and b.bbox[0] < x1 and b.bbox[2] > x0),
@@ -102,11 +105,11 @@ def find_notes(table: ExtractedTable, blocks: Sequence[TextBlock]) -> dict[int, 
     return read_notes(below, start=bottom)
 
 
-def notes_at_page_top(blocks: Sequence[TextBlock]) -> dict[int, str]:
+def notes_at_page_top(blocks: Sequence[TextBlock]) -> tuple[dict[int, str], list[TextBlock]]:
     """Footnotes that open a page: they belong to a table that ended at the bottom of the previous page."""
     body = sorted((b for b in blocks if not b.in_margin), key=lambda b: b.bbox[1])
     if not body or not (NOTE.match(body[0].text) or body[0].text == "Notes:"):
-        return {}
+        return {}, []
     return read_notes(body, start=body[0].bbox[1])
 
 
@@ -136,22 +139,33 @@ def row_to_text(names: Sequence[str], row: Sequence[str]) -> str:
     return " | ".join(f"{name}: {value}" for name, value in pairs)
 
 
-def find_captioned_tables(pages: Sequence[PageContent]) -> list[CaptionedTable]:
+def find_captioned_tables(
+    pages: Sequence[PageContent], sections: Mapping[int, Sequence[str]] | None = None
+) -> list[CaptionedTable]:
+    """The captioned tables of the pages, with their footnotes.
+
+    `sections` (from block_sections()) gives each table the section of its caption.
+    """
     captioned = []
     for i, page in enumerate(pages):
         on_page = []
         for table in page.tables:
             found = find_caption(table, page.blocks)
             if found:
-                number, caption = found
-                on_page.append(CaptionedTable(number, caption, table, find_notes(table, page.blocks)))
+                number, caption, caption_block = found
+                index = next(k for k, block in enumerate(page.blocks) if block is caption_block)
+                section = sections[page.page][index] if sections else ""
+                notes, note_blocks = find_notes(table, page.blocks)
+                on_page.append(CaptionedTable(number, caption, table, section, notes, [caption_block, *note_blocks]))
         # When a table ends near the bottom of the page, its footnotes continue
         # at the top of the next page.
         next_page = pages[i + 1] if i + 1 < len(pages) else None
         if on_page and next_page and next_page.page == page.page + 1:
             lowest = max(on_page, key=lambda part: part.table.bbox[3])
-            for number, note in notes_at_page_top(next_page.blocks).items():
+            notes, note_blocks = notes_at_page_top(next_page.blocks)
+            for number, note in notes.items():
                 lowest.notes.setdefault(number, note)
+            lowest.used_blocks.extend(note_blocks)
         captioned.extend(on_page)
     return captioned
 
@@ -168,13 +182,19 @@ def chunk_text(prefix: str, rows: Sequence[str], notes: dict[int, str]) -> str:
     return "\n".join(filter(None, [body, notes_text(body, notes)]))
 
 
-def table_chunks(doc: str, pages: Sequence[PageContent], max_chars: int = MAX_CHUNK_CHARS) -> list[Chunk]:
+def table_chunks(
+    doc: str,
+    pages: Sequence[PageContent],
+    sections: Mapping[int, Sequence[str]] | None = None,
+    max_chars: int = MAX_CHUNK_CHARS,
+) -> list[Chunk]:
     """Chunks for every captioned table of a document, in page order.
 
     The pages must come from parse_pdf() with the pdfplumber table extractor,
-    which provides the filled rows and header rows used here.
+    which provides the filled rows and header rows used here. `sections`
+    (from block_sections()) adds each table's section to its chunks.
     """
-    captioned = find_captioned_tables(pages)
+    captioned = find_captioned_tables(pages, sections)
     if any(part.table.filled_rows is None for part in captioned):
         raise ValueError("table chunks need tables from the pdfplumber extractor")
     # A table split over pages prints its footnotes below the last part only,
@@ -187,7 +207,7 @@ def table_chunks(doc: str, pages: Sequence[PageContent], max_chars: int = MAX_CH
     for part in captioned:
         if part.caption.split(". ", 1)[1] in SKIPPED_TABLES:
             continue
-        prefix = f"{device_name(doc)} datasheet | {part.caption}"
+        prefix = " | ".join(filter(None, [f"{device_name(doc)} datasheet", part.section, part.caption]))
         notes = notes_by_table[part.number]
         names = column_names(part.table)
         rows = [row_to_text(names, row) for row in part.table.filled_rows[part.table.header_rows :]]
@@ -207,7 +227,7 @@ def table_chunks(doc: str, pages: Sequence[PageContent], max_chars: int = MAX_CH
                     doc=doc,
                     page=part.table.page,
                     kind="table",
-                    section="",  # filled in from the PDF outline in a later step
+                    section=part.section,
                     title=part.caption,
                     text=chunk_text(prefix, group, notes),
                 )

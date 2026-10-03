@@ -78,6 +78,19 @@ class PageContent:
     blocks: list[TextBlock] = field(default_factory=list)
 
 
+@dataclass
+class OutlineEntry:
+    level: int  # 1 for chapters, 2 for their sections, ...
+    title: str  # e.g. "6.3.1 General operating conditions", "Table 14. General operating conditions"
+    page: int  # 1-based
+
+
+def read_outline(pdf_path: str | Path) -> list[OutlineEntry]:
+    """The PDF's outline (bookmarks): chapters, sections, tables and figures, in document order."""
+    with pymupdf.open(pdf_path) as doc:
+        return [OutlineEntry(level, title, page) for level, title, page in doc.get_toc()]
+
+
 def extract_text(page: pymupdf.Page) -> str:
     # Text in the order it is stored in the file, which in the ST datasheets is
     # the reading order. sort=True (order by position) was tried and is worse:
