@@ -20,3 +20,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # Emitted by PyMuPDF's SWIG bindings at import time, not by our code.
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
+]
