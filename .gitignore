@@ -1,0 +1,19 @@
+# Datasheet PDFs are copyrighted by ST: never commit them (see data/sources.yaml).
+# The .gitkeep keeps the empty folder in the repo so a fresh clone has it.
+data/raw/*
+!data/raw/.gitkeep
+
+# Extraction reports contain datasheet text, so they are not committed either.
+data/reports/
+
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
