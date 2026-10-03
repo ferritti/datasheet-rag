@@ -6,6 +6,9 @@ PyMuPDF:
   tables in ST datasheets), then plain text only.
 - cell_text_pdf has one table row with the three kinds of cell text that the
   extractors handle differently: a subscript, an underscore, rotated text.
+- merged_table_pdf has a table with merged cells and two bold header rows.
+- make_margin_pdf builds a page with a running header, a footer and body text,
+  optionally rotated like the landscape pages of the datasheets.
 """
 
 import pdfplumber
@@ -69,6 +72,44 @@ def cell_text_pdf(tmp_path):
     return path
 
 
+@pytest.fixture
+def merged_table_pdf(tmp_path):
+    """A 4x3 table: "Symbol" spans header rows 0-1, "Value" spans columns 1-2, "VDD" spans rows 2-3."""
+    path = tmp_path / "merged_table.pdf"
+    xs, ys = [72, 172, 272, 372], [100, 120, 140, 160, 180]
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        for y in (100, 140, 180):
+            page.draw_line((72, y), (372, y))
+        for y in (120, 160):  # no line under "Symbol" and "VDD", which span two rows
+            page.draw_line((172, y), (372, y))
+        for x in (72, 172, 372):
+            page.draw_line((x, 100), (x, 180))
+        page.draw_line((272, 120), (272, 180))  # no line inside "Value", which spans two columns
+        bold, regular = "hebo", "helv"  # PyMuPDF's names for Helvetica-Bold and Helvetica
+        cells = {
+            (0, 0): ("Symbol", bold), (0, 1): ("Value", bold), (1, 1): ("Min", bold), (1, 2): ("Max", bold),
+            (2, 0): ("VDD", regular), (2, 1): ("1.7", regular), (2, 2): ("3.6", regular),
+            (3, 1): ("1.8", regular), (3, 2): ("3.3", regular),
+        }
+        for (i, j), (text, font) in cells.items():
+            page.insert_text((xs[j] + 5, ys[i] + 14), text, fontsize=9, fontname=font)
+        doc.save(path)
+    return path
+
+
+def make_margin_pdf(path, rotation: int):
+    """One A4 page with a running header, a footer and body text, rotated by `rotation` degrees."""
+    with pymupdf.open() as doc:
+        page = doc.new_page()  # 595 x 842 pt
+        page.insert_text((72, 65), "Electrical characteristics", fontsize=9)
+        page.insert_text((72, 750), "DS10086 Rev 5 60/137", fontsize=9)
+        page.insert_text((200, 400), "Body text", fontsize=9)
+        page.set_rotation(rotation)
+        doc.save(path)
+    return path
+
+
 def test_returns_one_page_content_per_page_numbered_from_one(sample_pdf):
     pages = parse_pdf(sample_pdf)
     assert [page.page for page in pages] == [1, 2]
@@ -108,6 +149,75 @@ def test_rejects_pages_out_of_range(sample_pdf):
 def test_rejects_unknown_extractor(sample_pdf):
     with pytest.raises(ValueError, match="unknown table extractor"):
         parse_pdf(sample_pdf, table_extractor="camelot")
+
+
+def test_pdfplumber_fills_merged_cells_and_counts_bold_header_rows(merged_table_pdf):
+    [page] = parse_pdf(merged_table_pdf)
+    table = page.tables[0]
+    assert table.rows == [
+        ["Symbol", "Value", None],
+        [None, "Min", "Max"],
+        ["VDD", "1.7", "3.6"],
+        [None, "1.8", "3.3"],
+    ]
+    assert table.filled_rows == [
+        ["Symbol", "Value", "Value"],
+        ["Symbol", "Min", "Max"],
+        ["VDD", "1.7", "3.6"],
+        ["VDD", "1.8", "3.3"],
+    ]
+    assert table.header_rows == 2
+
+
+def test_body_row_with_a_bold_label_is_not_a_header_row(tmp_path):
+    # Like the thermal characteristics tables: a bold label followed by regular
+    # text in the same cell ("Thermal resistance" + " LQFP64").
+    path = tmp_path / "bold_label.pdf"
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        draw_grid(page, (72, 100, 372, 140), n_rows=2, n_cols=2)
+        page.insert_text((77, 114), "Parameter", fontsize=9, fontname="hebo")
+        page.insert_text((227, 114), "Value", fontsize=9, fontname="hebo")
+        page.insert_text((77, 134), "Thermal resistance", fontsize=9, fontname="hebo")
+        page.insert_text((77 + pymupdf.get_text_length("Thermal resistance ", fontname="hebo", fontsize=9), 134),
+                         "LQFP64", fontsize=9, fontname="helv")
+        page.insert_text((227, 134), "32", fontsize=9, fontname="helv")
+        doc.save(path)
+    [page] = parse_pdf(path)
+    assert page.tables[0].header_rows == 1
+
+
+def test_first_row_is_a_header_row_even_without_bold_text(sample_pdf):
+    # sample_pdf's table is set in regular type only.
+    pages = parse_pdf(sample_pdf)
+    assert pages[0].tables[0].header_rows == 1
+
+
+def test_blocks_flag_running_header_and_footer(tmp_path):
+    [page] = parse_pdf(make_margin_pdf(tmp_path / "margins.pdf", rotation=0))
+    assert {block.text: block.in_margin for block in page.blocks} == {
+        "Electrical characteristics": True,
+        "DS10086 Rev 5 60/137": True,
+        "Body text": False,
+    }
+
+
+def test_blocks_on_rotated_page_use_displayed_coordinates(tmp_path):
+    # On a landscape page PyMuPDF reports text on the unrotated page; the blocks
+    # must use the displayed page's coordinates, like pdfplumber's tables, and
+    # still recognise the header and footer (now on the left and right edges).
+    path = make_margin_pdf(tmp_path / "rotated.pdf", rotation=90)
+    [page] = parse_pdf(path)
+    body = next(block for block in page.blocks if block.text == "Body text")
+    with pdfplumber.open(path) as pdf:
+        # keep_blank_chars keeps "Body text" as one phrase; pdfplumber spells
+        # the rotated phrase backwards, which does not matter for its box.
+        words = pdf.pages[0].extract_words(keep_blank_chars=True)
+        [phrase] = [w for w in words if w["text"] in ("Body text", "txet ydoB")]
+    # A few points of slack: PyMuPDF's box includes the font's space above and
+    # below the letters; wrong coordinates would be off by hundreds of points.
+    assert body.bbox == pytest.approx((phrase["x0"], phrase["top"], phrase["x1"], phrase["bottom"]), abs=3)
+    assert [block.in_margin for block in page.blocks if block.text != "Body text"] == [True, True]
 
 
 def test_default_extractor_keeps_subscripts_underscores_and_rotated_text(cell_text_pdf):
