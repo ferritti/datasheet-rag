@@ -1,20 +1,16 @@
 """Tests for saving chunks and storing them in PostgreSQL.
 
-The database tests need the database of docker-compose.yml and are skipped when
-it is not running. They work in a temporary schema, dropped at the end, so the
-real `chunks` table is not touched. Embeddings are made-up vectors: the tests
-do not load the embedding model.
+The database tests use the `conn` fixture of conftest.py: a temporary schema in
+the database of docker-compose.yml, skipped when it is not running. Embeddings
+are made-up vectors: the tests do not load the embedding model.
 """
 
 import numpy as np
-import psycopg
 import pytest
 
 from datasheet_rag.indexing.embeddings import DIMENSIONS, QUERY_INSTRUCTION, query_text
-from datasheet_rag.indexing.store import connect, count_chunks, create_schema, replace_chunks
+from datasheet_rag.indexing.store import count_chunks, replace_chunks
 from datasheet_rag.ingestion.chunks import Chunk, load_chunks, save_chunks
-
-TEST_SCHEMA = "pytest_indexing"
 
 
 def chunk(doc: str, page: int, n: int) -> Chunk:
@@ -36,20 +32,6 @@ def test_chunks_survive_a_jsonl_round_trip(tmp_path):
 
 def test_questions_get_the_bge_query_instruction():
     assert query_text("Maximum VDD?") == QUERY_INSTRUCTION + "Maximum VDD?"
-
-
-@pytest.fixture
-def conn():
-    try:
-        conn = connect()
-    except (KeyError, psycopg.OperationalError) as error:  # no .env, or the database is not running
-        pytest.skip(f"database not available: {error}")
-    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}")
-    conn.execute(f"SET search_path TO {TEST_SCHEMA}, public")  # public holds the vector type
-    create_schema(conn)
-    yield conn
-    conn.execute(f"DROP SCHEMA {TEST_SCHEMA} CASCADE")
-    conn.close()
 
 
 def test_replace_chunks_replaces_only_that_document_and_strategy(conn):
