@@ -7,8 +7,10 @@ Two rules hold for every chunk, whatever strategy builds it:
   have near-identical tables and only the name tells them apart.
 """
 
+import json
 import re
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -46,3 +48,17 @@ def doc_id(pdf_path: str | Path) -> str:
 def device_name(doc: str) -> str:
     """'stm32f401re' -> 'STM32F401RE'."""
     return doc.upper()
+
+
+def save_chunks(chunks: Iterable[Chunk], path: str | Path) -> None:
+    """Write chunks as JSON Lines: one chunk per line, with the Chunk fields as keys."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for chunk in chunks:
+            f.write(json.dumps(asdict(chunk), ensure_ascii=False) + "\n")
+
+
+def load_chunks(path: str | Path) -> list[Chunk]:
+    with Path(path).open(encoding="utf-8") as f:
+        return [Chunk(**json.loads(line)) for line in f]

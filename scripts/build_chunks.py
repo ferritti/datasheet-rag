@@ -13,28 +13,19 @@ Usage (from the repository root):
 """
 
 import argparse
-import json
 import statistics
-from dataclasses import asdict
 from pathlib import Path
 
 import pymupdf
 
 from datasheet_rag.ingestion.chunking import STRATEGIES, chunk_pages
-from datasheet_rag.ingestion.chunks import MAX_CHUNK_CHARS, Chunk, doc_id
+from datasheet_rag.ingestion.chunks import MAX_CHUNK_CHARS, Chunk, doc_id, save_chunks
 from datasheet_rag.ingestion.pdf_parser import parse_pdf, read_outline
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 RAW_DIR = REPO_DIR / "data" / "raw"
 PROCESSED_DIR = REPO_DIR / "data" / "processed"
 REPORTS_DIR = REPO_DIR / "data" / "reports"
-
-
-def write_jsonl(chunks: list[Chunk], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for chunk in chunks:
-            f.write(json.dumps(asdict(chunk), ensure_ascii=False) + "\n")
 
 
 def preview(chunks: list[Chunk], title: str) -> str:
@@ -69,7 +60,7 @@ def main() -> None:
         pages, outline = parse_pdf(pdf_path), read_outline(pdf_path)
         for strategy in strategies:
             chunks = chunk_pages(doc, pages, outline, strategy)
-            write_jsonl(chunks, PROCESSED_DIR / f"chunks_{strategy}" / f"{doc}.jsonl")
+            save_chunks(chunks, PROCESSED_DIR / f"chunks_{strategy}" / f"{doc}.jsonl")
             report_path = REPORTS_DIR / pdf_path.stem / f"chunks_{strategy}.md"
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(preview(chunks, f"{doc}: {strategy} chunks"), encoding="utf-8")

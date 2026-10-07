@@ -11,6 +11,9 @@ dependencies = [
     "pymupdf>=1.24",     # page text + table detection (find_tables)
     "pdfplumber>=0.11",  # alternative table extractor, compared against PyMuPDF
     "sentence-transformers>=3.0",  # local embedding models
+    "psycopg[binary]>=3.1",  # PostgreSQL driver
+    "pgvector>=0.3",         # adapts numpy arrays to pgvector's vector type in psycopg
+    "python-dotenv>=1.0",    # reads the database settings from .env
 ]
 
 [project.optional-dependencies]
