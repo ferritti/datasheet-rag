@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pymupdf>=1.24",     # page text + table detection (find_tables)
     "pdfplumber>=0.11",  # alternative table extractor, compared against PyMuPDF
+    "sentence-transformers>=3.0",  # local embedding models
 ]
 
 [project.optional-dependencies]
