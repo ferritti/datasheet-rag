@@ -8,9 +8,10 @@ schema and the queries are visible (and hybrid search will need them later).
 There is deliberately no approximate (HNSW) index on the embeddings. With one
 it was tried: a search restricted to one datasheet returned 1 row instead of
 5, because the index first takes its nearest candidates over all chunks and
-the WHERE clause then drops most of them. Exact search over the ~8,000 chunks
-takes about 2 ms and is always right; an index (with pgvector's iterative
-scans) only pays off at hundreds of thousands of chunks.
+the WHERE clause then drops most of them. Exact search takes about 9 ms over
+the 5,205 structured chunks (2 ms within one datasheet) and is always right;
+an index (with pgvector's iterative scans) only pays off at hundreds of
+thousands of chunks.
 """
 
 import os
